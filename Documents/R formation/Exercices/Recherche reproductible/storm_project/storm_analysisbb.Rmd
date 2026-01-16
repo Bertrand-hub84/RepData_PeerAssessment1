@@ -1,0 +1,253 @@
+---
+title: "Impact of Severe Weather Events on Public Health and Economy in the U.S."
+author: "Bertrand"
+date: "2026-01-16"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+## Synopsis
+
+Severe weather events can cause substantial harm to communities, including fatalities, injuries, and major economic losses.  
+This report analyzes the U.S. NOAA Storm Data database (1950–November 2011) to identify the event types associated with the greatest public health and economic impacts.  
+Public health impact is measured as the total number of fatalities and injuries aggregated by event type (EVTYPE).  
+Economic impact is measured as total property and crop damages, converted into U.S. dollars using the magnitude exponent fields (e.g., K, M, B).  
+To improve comparability, EVTYPE labels are standardized (trimmed and converted to uppercase) to reduce duplicates caused by inconsistent formatting.  
+Results are presented using summary tables and two bar charts to support prioritization of preparedness resources.  
+A decision table combines both dimensions (health and economy) to help stakeholders identify event types that are critical under different priorities.  
+All steps are documented with code to ensure reproducibility starting from the raw compressed CSV file.
+
+---
+
+## Data Processing
+
+This section describes how the data are loaded from the original compressed file and transformed for analysis. We retain only the variables required for the assignment, standardize event type labels (EVTYPE) for consistent grouping, and convert recorded damages into U.S. dollars using the magnitude exponent fields (e.g., K, M, B).
+
+```{r setup, echo=TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Install/load required packages
+pkgs <- c("dplyr", "ggplot2", "scales", "knitr")
+for (p in pkgs) {
+  if (!requireNamespace(p, quietly = TRUE)) {
+    install.packages(p, repos = "https://cloud.r-project.org")
+  }
+}
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(knitr)
+
+# Loading the raw data (from the original .csv.bz2 file)
+
+file <- "repdata_data_StormData.csv.bz2"
+storm <- read.csv(file, stringsAsFactors = FALSE)
+
+dim(storm)
+names(storm)[1:15]
+
+# Keep required variables and standardize EVTYPE
+
+data <- storm %>%
+select(EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP) %>%
+mutate(EVTYPE = toupper(trimws(EVTYPE)))
+
+# Convert damage exponents into dollars
+
+exp_map <- function(x) {
+x <- toupper(trimws(x))
+dplyr::case_when(
+x == "H" ~ 1e2,
+x == "K" ~ 1e3,
+x == "M" ~ 1e6,
+x == "B" ~ 1e9,
+x == ""  ~ 1,
+x == "0" ~ 1,
+x == "1" ~ 10,
+x == "2" ~ 1e2,
+x == "3" ~ 1e3,
+x == "4" ~ 1e4,
+x == "5" ~ 1e5,
+x == "6" ~ 1e6,
+x == "7" ~ 1e7,
+x == "8" ~ 1e8,
+x == "9" ~ 1e9,
+TRUE ~ NA_real_
+)
+}
+
+data <- data %>%
+mutate(
+prop_mult   = exp_map(PROPDMGEXP),
+crop_mult   = exp_map(CROPDMGEXP),
+prop_damage = PROPDMG * prop_mult,
+crop_damage = CROPDMG * crop_mult,
+econ_damage = prop_damage + crop_damage
+)
+
+# Diagnostics for unexpected exponent codes
+
+sum(is.na(data$prop_mult))
+sum(is.na(data$crop_mult))
+
+
+
+# # Results
+
+
+# Health impacts
+
+health <- data %>%
+group_by(EVTYPE) %>%
+summarise(
+fatalities   = sum(FATALITIES, na.rm = TRUE),
+injuries     = sum(INJURIES, na.rm = TRUE),
+total_health = fatalities + injuries,
+.groups = "drop"
+) %>%
+arrange(desc(total_health))
+
+top_health <- health %>% slice_head(n = 10)
+
+kable(top_health,
+caption = "Table 1. Top 10 Event Types by Public Health Impact (Fatalities + Injuries)")
+
+# Figure 1: Health impacts (top 10)
+
+ggplot(top_health, aes(x = reorder(EVTYPE, total_health), y = total_health)) +
+geom_col() +
+coord_flip() +
+labs(
+title = "Figure 1. Event Types Most Harmful to Population Health",
+subtitle = "Top 10 EVTYPE categories by total fatalities + injuries (1950–Nov 2011).",
+x = "Event type (EVTYPE)",
+y = "Total fatalities + injuries"
+)
+
+# Economic impacts
+
+econ <- data %>%
+group_by(EVTYPE) %>%
+summarise(
+property_damage = sum(prop_damage, na.rm = TRUE),
+crop_damage     = sum(crop_damage, na.rm = TRUE),
+total_econ      = sum(econ_damage, na.rm = TRUE),
+.groups = "drop"
+) %>%
+arrange(desc(total_econ))
+
+top_econ <- econ %>% slice_head(n = 10)
+
+kable(top_econ,
+caption = "Table 2. Top 10 Event Types by Total Economic Damage (Property + Crops, USD)")
+
+# Figure 2: Economic impacts (top 10)
+
+ggplot(top_econ, aes(x = reorder(EVTYPE, total_econ), y = total_econ)) +
+geom_col() +
+coord_flip() +
+scale_y_continuous(labels = label_dollar(scale = 1e-9, suffix = "B")) +
+labs(
+title = "Figure 2. Event Types with the Greatest Economic Consequences",
+subtitle = "Top 10 EVTYPE categories by total property + crop damage (1950–Nov 2011).",
+x = "Event type (EVTYPE)",
+y = "Total economic damage (Billions of USD)"
+)
+
+
+# # Data Analysis
+
+
+# Helper formatters
+
+fmt_int <- function(x) format(round(x), big.mark = ",")
+fmt_usd <- function(x) paste0("$", format(round(x), big.mark = ","))
+
+# Top 3 health and economic
+
+h3 <- health %>% slice_head(n = 3)
+e3 <- econ   %>% slice_head(n = 3)
+
+# Paragraphs for decision-makers
+
+cat(paste0(
+"Public health impacts are dominated by ", h3$EVTYPE[1],
+", followed by ", h3$EVTYPE[2], " and ", h3$EVTYPE[3], ". ",
+"Across 1950–Nov 2011, ", h3$EVTYPE[1], " accounts for ",
+fmt_int(h3$fatalities[1]), " fatalities and ", fmt_int(h3$injuries[1]),
+" injuries (total ", fmt_int(h3$total_health[1]), "). ",
+"The next two event types total ", fmt_int(h3$total_health[2]),
+" and ", fmt_int(h3$total_health[3]), " affected people, respectively.\n\n"
+))
+
+cat(paste0(
+"Economic losses are dominated by ", e3$EVTYPE[1],
+", followed by ", e3$EVTYPE[2], " and ", e3$EVTYPE[3], ". ",
+"Total damage (property + crops) is estimated at ", fmt_usd(e3$total_econ[1]),
+" for ", e3$EVTYPE[1], " (property: ", fmt_usd(e3$property_damage[1]),
+"; crops: ", fmt_usd(e3$crop_damage[1]), "). ",
+"The next two event types are associated with ", fmt_usd(e3$total_econ[2]),
+" and ", fmt_usd(e3$total_econ[3]), " in total losses, respectively.\n\n"
+))
+
+cat(
+"Prioritization should recognize that the leading event types for human harm and for financial loss are not always identical; preparedness planning should balance life-safety interventions with mitigation strategies that reduce high-cost damages.\n\n"
+)
+
+# Decision table (union of top-10 lists)
+
+candidate_evtypes <- union(top_health$EVTYPE, top_econ$EVTYPE)
+
+health_ranked <- health %>% mutate(health_rank = row_number())
+econ_ranked   <- econ   %>% mutate(econ_rank   = row_number())
+
+rng01 <- function(x) {
+if (all(is.na(x))) return(rep(NA_real_, length(x)))
+(x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+decision <- tibble(EVTYPE = candidate_evtypes) %>%
+left_join(health_ranked %>% select(EVTYPE, health_rank, fatalities, injuries, total_health), by = "EVTYPE") %>%
+left_join(econ_ranked %>% select(EVTYPE, econ_rank, property_damage, crop_damage, total_econ), by = "EVTYPE") %>%
+mutate(
+health_score_0_100 = 100 * rng01(total_health),
+econ_score_0_100   = 100 * rng01(total_econ),
+health_score_0_100 = ifelse(is.na(health_score_0_100), 0, health_score_0_100),
+econ_score_0_100   = ifelse(is.na(econ_score_0_100), 0, econ_score_0_100)
+)
+
+# Combined score weights (adjust if needed)
+
+w_health <- 0.5
+w_econ   <- 0.5
+
+decision <- decision %>%
+mutate(
+combined_priority_score = w_health * health_score_0_100 + w_econ * econ_score_0_100,
+total_econ_fmt = fmt_usd(total_econ),
+property_fmt   = fmt_usd(property_damage),
+crop_fmt       = fmt_usd(crop_damage)
+) %>%
+arrange(desc(combined_priority_score)) %>%
+select(
+EVTYPE,
+health_rank, total_health, fatalities, injuries, health_score_0_100,
+econ_rank, total_econ_fmt, property_fmt, crop_fmt, econ_score_0_100,
+combined_priority_score
+)
+
+kable(decision, digits = 1,
+caption = "Table 3. Decision Table Comparing Health and Economic Impacts (Union of Top-10 Lists; Scores normalized to 0–100)")
+
+```
+
+---
+## Reproducibility Note
+
+All figures, tables, and numerical summaries in this report are generated from the raw dataset file (repdata_data_StormData.csv.bz2) within this document. Re-knitting the document should reproduce the same results, provided the raw data file is available in the working directory.
+
+

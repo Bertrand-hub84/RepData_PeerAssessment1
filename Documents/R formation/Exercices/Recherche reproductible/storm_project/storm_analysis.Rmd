@@ -1,0 +1,188 @@
+---
+title: "Impact of Severe Weather Events on Public Health and Economy in the U.S."
+author: "Bertrand"
+date: "2026-01-16"
+output: html_document
+---
+## Synopsis
+
+Severe weather events can cause substantial harm to communities, including injuries and fatalities as well as extensive property and crop damage.  
+This report analyzes the U.S. National Oceanic and Atmospheric Administration (NOAA) Storm Data database (1950–November 2011) to identify which event types have the greatest public health impacts and which have the greatest economic consequences.  
+Public health impact is assessed using the total number of fatalities and injuries, aggregated by event type.  
+Economic impact is assessed using total property and crop damages, converted to U.S. dollars based on the recorded magnitude exponents (e.g., K, M, B).  
+To improve comparability, event types are standardized by trimming whitespace and converting to uppercase.  
+Results are presented as top-10 summaries and two bar plots to support prioritization of preparedness resources.  
+Overall, the analysis highlights a small number of event categories that dominate health impacts and a partly different set of categories that dominate economic losses.  
+The code and transformations are fully documented so that the analysis is reproducible from the raw compressed CSV file.
+---
+
+## Data Processing
+
+```{r setup, echo=TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Load packages (install if missing)
+if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
+if (!requireNamespace("ggplot2", quietly = TRUE)) install.packages("ggplot2")
+if (!requireNamespace("scales", quietly = TRUE)) install.packages("scales")
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+file <- "repdata_data_StormData.csv.bz2"
+
+# Read compressed CSV directly
+
+storm <- read.csv(file, stringsAsFactors = FALSE)
+
+dim(storm)
+names(storm)[1:15]
+
+data <- storm %>%
+select(EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP) %>%
+mutate(
+EVTYPE = toupper(trimws(EVTYPE))
+)
+
+summary(data$FATALITIES)
+summary(data$INJURIES)
+
+exp_map <- function(x) {
+x <- toupper(trimws(x))
+dplyr::case_when(
+x == "H" ~ 1e2,
+x == "K" ~ 1e3,
+x == "M" ~ 1e6,
+x == "B" ~ 1e9,
+x == ""  ~ 1,
+x == "0" ~ 1,
+x == "1" ~ 10,
+x == "2" ~ 1e2,
+x == "3" ~ 1e3,
+x == "4" ~ 1e4,
+x == "5" ~ 1e5,
+x == "6" ~ 1e6,
+x == "7" ~ 1e7,
+x == "8" ~ 1e8,
+x == "9" ~ 1e9,
+TRUE ~ NA_real_
+)
+}
+
+data <- data %>%
+mutate(
+prop_mult = exp_map(PROPDMGEXP),
+crop_mult = exp_map(CROPDMGEXP),
+prop_damage = PROPDMG * prop_mult,
+crop_damage = CROPDMG * crop_mult,
+econ_damage = prop_damage + crop_damage
+)
+
+# Quick check of missing multipliers (unexpected exponent codes)
+
+sum(is.na(data$prop_mult))
+sum(is.na(data$crop_mult))
+
+health <- data %>%
+group_by(EVTYPE) %>%
+summarise(
+fatalities = sum(FATALITIES, na.rm = TRUE),
+injuries   = sum(INJURIES, na.rm = TRUE),
+total_health = fatalities + injuries,
+.groups = "drop"
+) %>%
+arrange(desc(total_health))
+
+top_health <- health %>% slice_head(n = 10)
+
+top_health
+
+# Figure 1: Top 10 event types by total health impact
+
+ggplot(top_health, aes(x = reorder(EVTYPE, total_health), y = total_health)) +
+geom_col() +
+coord_flip() +
+labs(
+title = "Top 10 Weather Event Types Most Harmful to Population Health",
+subtitle = "Measured as total fatalities + injuries (NOAA Storm Data, 1950–Nov 2011)",
+x = "Event type (EVTYPE)",
+y = "Total fatalities + injuries"
+)
+
+econ <- data %>%
+group_by(EVTYPE) %>%
+summarise(
+property_damage = sum(prop_damage, na.rm = TRUE),
+crop_damage     = sum(crop_damage, na.rm = TRUE),
+total_econ      = sum(econ_damage, na.rm = TRUE),
+.groups = "drop"
+) %>%
+arrange(desc(total_econ))
+
+top_econ <- econ %>% slice_head(n = 10)
+
+top_econ
+
+# Figure 2: Top 10 event types by total economic damage
+
+ggplot(top_econ, aes(x = reorder(EVTYPE, total_econ), y = total_econ)) +
+geom_col() +
+coord_flip() +
+scale_y_continuous(labels = label_dollar(scale = 1e-9, suffix = "B")) +
+labs(
+title = "Top 10 Weather Event Types with Greatest Economic Consequences",
+subtitle = "Total property + crop damage converted to USD (NOAA Storm Data, 1950–Nov 2011)",
+x = "Event type (EVTYPE)",
+y = "Total economic damage (Billions of USD)"
+)
+
+```
+## Results
+
+```{r results-text, echo=TRUE}
+
+# Top 3 (health)
+h3 <- top_health %>% slice_head(n = 3)
+
+# Top 3 (economic)
+e3 <- top_econ %>% slice_head(n = 3)
+
+# Helper formatters
+fmt_int <- function(x) format(round(x), big.mark = ",")
+fmt_usd <- function(x) paste0("$", format(round(x), big.mark = ","))
+
+# Build decision-maker oriented text (English)
+health_paragraph <- paste0(
+  "Public health impacts are dominated by ",
+  h3$EVTYPE[1], ", followed by ", h3$EVTYPE[2], " and ", h3$EVTYPE[3], ". ",
+  "Across 1950–Nov 2011, ", h3$EVTYPE[1], " accounts for ",
+  fmt_int(h3$fatalities[1]), " fatalities and ", fmt_int(h3$injuries[1]),
+  " injuries (total ", fmt_int(h3$total_health[1]), "). ",
+  "The next two event types, ", h3$EVTYPE[2], " and ", h3$EVTYPE[3],
+  ", account for totals of ", fmt_int(h3$total_health[2]), " and ",
+  fmt_int(h3$total_health[3]), " affected people (fatalities + injuries), respectively."
+)
+
+econ_paragraph <- paste0(
+  "Economic losses are dominated by ",
+  e3$EVTYPE[1], ", followed by ", e3$EVTYPE[2], " and ", e3$EVTYPE[3], ". ",
+  "Total damage (property + crops) is estimated at ",
+  fmt_usd(e3$total_econ[1]), " for ", e3$EVTYPE[1], " (property: ",
+  fmt_usd(e3$property_damage[1]), "; crops: ", fmt_usd(e3$crop_damage[1]), "). ",
+  "The next two event types, ", e3$EVTYPE[2], " and ", e3$EVTYPE[3],
+  ", are associated with ", fmt_usd(e3$total_econ[2]), " and ",
+  fmt_usd(e3$total_econ[3]), " in total losses, respectively."
+)
+
+priority_sentence <- paste0(
+  "Prioritization should consider that the leading event types for human harm and for economic loss are not always identical; ",
+  "preparedness planning should therefore balance life-safety measures with investments that reduce high-cost damages."
+)
+
+health_paragraph
+econ_paragraph
+priority_sentence
+```
+---
+
